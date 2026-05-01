@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
 
 /* 每个 IO 请求的上下文，用于完成回调跟踪 */
 enum io_dir {
@@ -158,6 +159,75 @@ mini_disk_init(struct mini_disk **disk, const char *pci_addr)
 	return 0;
 }
 
+int
+mini_disk_init_mock(struct mini_disk **disk)
+{
+	if (disk == NULL) {
+		return -1;
+	}
+
+	struct mini_disk *d = (struct mini_disk *)calloc(1, sizeof(struct mini_disk));
+	if (d == NULL) {
+		return -1;
+	}
+	d->stats.min_latency_us = UINT64_MAX;
+	d->mock_mode = true;
+	d->mock_size = 10ULL * 1024 * 1024; /* 10 MB 模拟磁盘 */
+	pthread_mutex_init(&d->stats_lock, NULL);
+
+	d->mock_data = (uint8_t *)malloc(d->mock_size);
+	if (d->mock_data == NULL) {
+		free(d);
+		return -1;
+	}
+	memset(d->mock_data, 0, d->mock_size);
+
+	/* 初始化 SPDK 环境（提供 spdk_get_ticks() 等函数） */
+	if (!g_env_initialized) {
+		struct spdk_env_opts opts;
+		opts.opts_size = sizeof(opts);
+		spdk_env_opts_init(&opts);
+		opts.name = "mini_disk";
+		opts.shm_id = 0;
+		if (spdk_env_init(&opts) < 0) {
+			fprintf(stderr, "ERROR: spdk_env_init() failed\n");
+			free(d->mock_data);
+			free(d);
+			return -1;
+		}
+		g_env_initialized = 1;
+	}
+
+	*disk = d;
+	return 0;
+}
+
+static void
+disk_stats_update(struct mini_disk *disk, int is_write, int status,
+		  uint64_t latency_us, uint32_t data_size)
+{
+	pthread_mutex_lock(&disk->stats_lock);
+	if (status == 0) {
+		if (is_write) {
+			disk->stats.total_writes++;
+			disk->stats.total_write_bytes += data_size;
+		} else {
+			disk->stats.total_reads++;
+			disk->stats.total_read_bytes += data_size;
+		}
+		disk->stats.total_latency_us += latency_us;
+		if (latency_us > disk->stats.max_latency_us) {
+			disk->stats.max_latency_us = latency_us;
+		}
+		if (latency_us < disk->stats.min_latency_us) {
+			disk->stats.min_latency_us = latency_us;
+		}
+	} else {
+		disk->stats.error_count++;
+	}
+	pthread_mutex_unlock(&disk->stats_lock);
+}
+
 static int
 mini_disk_io(struct mini_disk *disk, uint64_t lba,
 	     uint32_t lba_count, void *buf, int is_write)
@@ -166,8 +236,45 @@ mini_disk_io(struct mini_disk *disk, uint64_t lba,
 		return -1;
 	}
 
-	uint32_t sector_size = spdk_nvme_ns_get_sector_size(disk->ns);
+	uint32_t sector_size = (disk->mock_mode) ? 512 :
+			       spdk_nvme_ns_get_sector_size(disk->ns);
 	uint32_t data_size = sector_size * lba_count;
+
+	uint64_t submit_ticks = spdk_get_ticks();
+
+	if (disk->mock_mode) {
+		/* 模拟 IO：使用内存缓冲区，基础延迟 ~100us */
+		uint64_t offset = lba * sector_size;
+		if (offset + data_size > disk->mock_size) {
+			return -1;
+		}
+		usleep(100);
+
+		if (is_write) {
+			memcpy(disk->mock_data + offset, buf, data_size);
+		} else {
+			memcpy(buf, disk->mock_data + offset, data_size);
+		}
+
+		uint64_t now_ticks = spdk_get_ticks();
+		uint64_t elapsed_ticks = now_ticks - submit_ticks;
+		uint64_t ticks_hz = spdk_get_ticks_hz();
+		uint64_t latency_us = (ticks_hz > 0) ? (elapsed_ticks * 1000000) / ticks_hz : 0;
+		latency_us += disk->inject_delay_us;
+
+		int status = 0;
+		if (disk->inject_error_rate > 0.0f) {
+			float r = (float)rand() / (float)RAND_MAX;
+			if (r < disk->inject_error_rate) {
+				status = 1;
+			}
+		}
+
+		disk_stats_update(disk, is_write, status, latency_us, data_size);
+		return status;
+	}
+
+	/* ---- 以下是 NVMe PCIe 真实路径 ---- */
 
 	/* 分配 DMA 可访问的 bounce buffer */
 	void *bounce = spdk_zmalloc(data_size, sector_size, NULL,
@@ -183,7 +290,7 @@ mini_disk_io(struct mini_disk *disk, uint64_t lba,
 	struct io_ctx ctx;
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.disk = disk;
-	ctx.submit_ticks = spdk_get_ticks();
+	ctx.submit_ticks = submit_ticks;
 	ctx.dir = is_write ? IO_WRITE : IO_READ;
 	ctx.data_size = data_size;
 
@@ -264,14 +371,18 @@ mini_disk_fini(struct mini_disk *disk)
 	if (disk == NULL) {
 		return;
 	}
-	if (disk->qpair) {
-		spdk_nvme_ctrlr_free_io_qpair(disk->qpair);
-	}
-	if (disk->ctrlr) {
-		struct spdk_nvme_detach_ctx *detach_ctx = NULL;
-		spdk_nvme_detach_async(disk->ctrlr, &detach_ctx);
-		if (detach_ctx) {
-			spdk_nvme_detach_poll(detach_ctx);
+	if (disk->mock_mode) {
+		free(disk->mock_data);
+	} else {
+		if (disk->qpair) {
+			spdk_nvme_ctrlr_free_io_qpair(disk->qpair);
+		}
+		if (disk->ctrlr) {
+			struct spdk_nvme_detach_ctx *detach_ctx = NULL;
+			spdk_nvme_detach_async(disk->ctrlr, &detach_ctx);
+			if (detach_ctx) {
+				spdk_nvme_detach_poll(detach_ctx);
+			}
 		}
 	}
 	pthread_mutex_destroy(&disk->stats_lock);

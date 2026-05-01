@@ -2,6 +2,7 @@
 #define MINI_DISK_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <pthread.h>
 
 #ifdef __cplusplus
@@ -36,10 +37,18 @@ struct mini_disk {
 
 	uint32_t                   inject_delay_us;
 	float                      inject_error_rate;
+
+	/* mock 模式：不依赖真实 NVMe 硬件 */
+	bool                       mock_mode;
+	uint8_t                   *mock_data;
+	uint64_t                   mock_size;
 };
 
 /* 初始化磁盘客户端，挂载到指定 PCI 地址的 NVMe 设备 */
 int mini_disk_init(struct mini_disk **disk, const char *pci_addr);
+
+/* 初始化 mock 磁盘客户端，使用内存模拟，不依赖真实 NVMe 硬件 */
+int mini_disk_init_mock(struct mini_disk **disk);
 
 /* 从 lba 开始读取 lba_count 个块到 buf */
 int mini_disk_read(struct mini_disk *disk, uint64_t lba,

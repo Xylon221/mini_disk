@@ -18,16 +18,23 @@ sig_handler(int sig)
 int
 main(int argc, char **argv)
 {
-	if (argc < 2) {
-		printf("Usage: %s <pci_addr>\n", argv[0]);
-		printf("Example: %s 0000:00:04.0\n", argv[0]);
-		return 1;
-	}
-
 	signal(SIGINT, sig_handler);
 
 	struct mini_disk *disk = NULL;
-	int ret = mini_disk_init(&disk, argv[1]);
+	int ret;
+
+	if (argc >= 2 && strcmp(argv[1], "--mock") == 0) {
+		printf("Running in mock mode (no real NVMe hardware)\n");
+		ret = mini_disk_init_mock(&disk);
+	} else if (argc >= 2) {
+		ret = mini_disk_init(&disk, argv[1]);
+	} else {
+		printf("Usage: %s <pci_addr | --mock>\n", argv[0]);
+		printf("Example: %s 0000:00:04.0\n", argv[0]);
+		printf("Example: %s --mock\n", argv[0]);
+		return 1;
+	}
+
 	if (ret != 0) {
 		printf("Failed to init disk\n");
 		return 1;

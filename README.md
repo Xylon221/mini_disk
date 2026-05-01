@@ -31,6 +31,20 @@
 | `monitor` | 后台 pthread 每秒读取 `io_stats`，报告 IOPS、平均/最大延迟、错误率。平均延迟 > 10ms 时告警，错误率 > 50% 时打印 FATAL |
 | `inject` | 设置故障注入参数：人工延迟（累加到延迟统计中）和概率性错误返回 |
 
+## 目录结构
+
+```
+mini_disk/
+├── src/                 # 源代码
+│   ├── main.c           # 四阶段 IO 测试驱动
+│   ├── mini_disk.c/.h   # 核心 NVMe 路径
+│   ├── monitor.c/.h     # 健康监控线程
+│   └── inject.c/.h      # 故障注入
+├── build/               # 编译产物（.gitignore）
+├── Makefile
+└── README.md
+```
+
 ## 编译
 
 **前提条件：** SPDK 必须已在 `/home/ubuntu/workspace/spdk` 中完成编译（包含 DPDK 和 NVME 驱动），且已配置大页内存（通过 SPDK 的 `setup.sh` 脚本）。
@@ -40,13 +54,23 @@ cd /home/ubuntu/workspace/mini_disk
 make
 ```
 
-底层使用 `pkg-config` 自动解析所有 SPDK、DPDK 和系统库的编译链接参数，生成 `mini_disk` 二进制文件。
+底层使用 `pkg-config` 自动解析所有 SPDK、DPDK 和系统库的编译链接参数，生成 `build/mini_disk` 二进制文件。
 
 ## 运行
 
+**Mock 模式（无需 NVMe 硬件，推荐）**
+
+```bash
+cd /home/ubuntu/workspace/mini_disk
+sudo LD_LIBRARY_PATH=/home/ubuntu/workspace/spdk/build/lib:/home/ubuntu/workspace/spdk/dpdk/build/lib:/home/ubuntu/workspace/spdk/isa-l/.libs:/home/ubuntu/workspace/spdk/isa-l-crypto/.libs \
+  ./build/mini_disk --mock
+```
+
+**真实 NVMe 模式**
+
 ```bash
 sudo LD_LIBRARY_PATH=/home/ubuntu/workspace/spdk/build/lib:/home/ubuntu/workspace/spdk/dpdk/build/lib:/home/ubuntu/workspace/spdk/isa-l/.libs:/home/ubuntu/workspace/spdk/isa-l-crypto/.libs \
-  ./mini_disk 0000:00:04.0
+  ./build/mini_disk 0000:00:04.0
 ```
 
 请将 PCI 地址替换为你 NVMe 设备的 BDF 地址。
