@@ -70,6 +70,10 @@ void mini_disk_inject_set_delay(struct mini_disk *disk, uint32_t delay_us);
 /* 注入错误率 (0.0 ~ 1.0)，按比例将 IO 标记为失败 */
 void mini_disk_inject_set_error_rate(struct mini_disk *disk, float rate);
 
+/* 获取磁盘几何信息：扇区大小和总容量（字节） */
+void mini_disk_get_geometry(struct mini_disk *disk,
+			    uint32_t *sector_size, uint64_t *ns_size);
+
 /* 清理：释放 qpair、分离控制器、释放资源 */
 void mini_disk_fini(struct mini_disk *disk);
 

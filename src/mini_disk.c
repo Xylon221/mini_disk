@@ -125,6 +125,7 @@ mini_disk_init(struct mini_disk **disk, const char *pci_addr)
 		spdk_env_opts_init(&opts);
 		opts.name = "mini_disk";
 		opts.shm_id = 0;
+		opts.iova_mode = "pa";
 		if (spdk_env_init(&opts) < 0) {
 			fprintf(stderr, "ERROR: spdk_env_init() failed\n");
 			free(d);
@@ -189,6 +190,7 @@ mini_disk_init_mock(struct mini_disk **disk)
 		spdk_env_opts_init(&opts);
 		opts.name = "mini_disk";
 		opts.shm_id = 0;
+		opts.iova_mode = "pa";
 		if (spdk_env_init(&opts) < 0) {
 			fprintf(stderr, "ERROR: spdk_env_init() failed\n");
 			free(d->mock_data);
@@ -363,6 +365,23 @@ mini_disk_reset_stats(struct mini_disk *disk)
 	memset(&disk->stats, 0, sizeof(disk->stats));
 	disk->stats.min_latency_us = UINT64_MAX;
 	pthread_mutex_unlock(&disk->stats_lock);
+}
+
+void
+mini_disk_get_geometry(struct mini_disk *disk, uint32_t *sector_size,
+			uint64_t *ns_size)
+{
+	if (disk == NULL) {
+		return;
+	}
+	if (sector_size) {
+		*sector_size = (disk->mock_mode) ? 512 :
+			       spdk_nvme_ns_get_sector_size(disk->ns);
+	}
+	if (ns_size) {
+		*ns_size = (disk->mock_mode) ? disk->mock_size :
+			   spdk_nvme_ns_get_size(disk->ns);
+	}
 }
 
 void
